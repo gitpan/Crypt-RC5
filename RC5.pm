@@ -17,7 +17,6 @@
 package Crypt::RC5;
 
 use Exporter;
-use warnings;
 use strict;
 no strict 'refs';
 
@@ -26,7 +25,7 @@ our ( @L, @S, @EXPORT_OK, @ISA );
 
 @ISA       = qw(Exporter);
 @EXPORT_OK = qw($VERSION RC5);
-$VERSION   = '1.0';
+$VERSION   = '1.01';
 
 sub new {
     ( $class, $key, $rounds )  = @_;
@@ -40,7 +39,7 @@ sub new {
         }
         $newKey .= $temp;
     }
-    print $newKey, "\n";
+#    print $newKey, "\n";
     @L = unpack "V*", pack "H*x3", $newKey;
     return $self;
 }
