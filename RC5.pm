@@ -1,9 +1,9 @@
 #---------------------------------------------------------------------------#
 # Crypt::RC5
 #       Date Written:   23-Nov-2001 10:47:02 AM
-#       Last Modified:  23-Nov-2001 10:47:04 AM
+#       Last Modified:  05-Nov-2002 09:52:18 AM
 #       Author:    Kurt Kincaid
-#       Copyright (c) 2001, Kurt Kincaid
+#       Copyright (c) 2002, Kurt Kincaid
 #           All Rights Reserved
 #
 # NOTICE:  RC5 is a fast block cipher designed by Ronald Rivest
@@ -17,87 +17,105 @@
 package Crypt::RC5;
 
 use Exporter;
+use integer;
 use strict;
 no strict 'refs';
-
-our ( $VERSION, $processed, $key, $rounds, $text, $class, $block, $decrypt, $A, $B, $T, $last, $m, $n, $x, $self );
-our ( @L, @S, @EXPORT_OK, @ISA );
+use vars qw/ $VERSION @EXPORT_OK @ISA @S /;
 
 @ISA       = qw(Exporter);
 @EXPORT_OK = qw($VERSION RC5);
-$VERSION   = '1.01';
+$VERSION   = '2.00';
 
-sub new {
-    ( $class, $key, $rounds )  = @_;
+sub new ($$$) {
+    my ( $class, $key, $rounds ) = @_;
     my $self = bless {}, $class;
     my @temp = unpack( "C*", $key );
     my $newKey;
     foreach my $temp ( @temp ) {
         $temp = sprintf( "%lx", $temp );
-        if ( length($temp) < 2 ) {
+        if ( length( $temp ) < 2 ) {
             $temp = "0" . $temp;
         }
         $newKey .= $temp;
     }
-#    print $newKey, "\n";
-    @L = unpack "V*", pack "H*x3", $newKey;
+    my @L = unpack "V*", pack "H*x3", $newKey;
+    my $T = 0xb7e15163;
+    @S = ( M( $T ), map { $T = M( $T + 0x9e3779b9 ) } 0 .. 2 * $rounds );
+    my ( $A, $B ) = ( 0, 0 );
+    for ( 0 .. 3 * ( @S > @L ? @S : @L ) - 1 ) {
+        $A = $S[ $_ % @S ] = ROTL( 3, M( $S[ $_ % @S ] ) + M( $A + $B ) );
+        $B = $L[ $_ % @L ] = ROTL( M( $A + $B ), M( $L[ $_ % @L ] ) + M( $A + $B ) );
+    }
     return $self;
 }
 
-sub encrypt {
-    ( $self, $text ) = @_;
-    return RC5( $text );
+sub encrypt ($$) {
+    my ( $self, $text ) = @_;
+    return $self->RC5( $text );
 }
 
-sub decrypt {
-    ( $self, $text ) = @_;
-    return RC5( $text, 1 );
+sub decrypt ($$) {
+    my ( $self, $text ) = @_;
+    return $self->RC5( $text, 1 );
 }
 
-sub RC5 {
-    undef $processed;
-    if ( ref $_[0] ) {
-        my $self = shift;
-    }
-    ( $text, $decrypt ) = @_;
-    @S = ( $T = 0xb7e15163, map { $T = M( $T + 0x9e3779b9 ) } 0 .. 2 * $rounds );
-    for ( 0 .. 3 * ( @S > @L ? @S : @L ) - 1 ) {
-        $A = Y( @S, 3 );
-        $B = Y( @L, M( $A + $B ) );
-    }
-    while ( $text =~ /(.{8})/g ) {
+sub decrypt_iv ($$$) {
+    my ( $self, $text, $iv ) = @_;
+    die "iv must be 8 bytes long" if length( $iv ) != 8;
+
+    my @ivnum = unpack( 'C*', $iv . $text );
+    my @plain = unpack( 'C*', $self->RC5( $text, 1 ) );
+    for ( 0 .. @plain ) { $plain[ $_ ] ^= $ivnum[ $_ ]; }
+    return pack( 'C*', @plain );
+}
+
+sub RC5 ($$) {
+    my ( $self, $text, $decrypt ) = @_;
+    my $last;
+    my $processed = '';
+    while ( $text =~ /(.{8})/gs ) {
         $last = $';
-        Process( $1, $decrypt );
+        $processed .= Process( $1, $decrypt );
     }
     if ( length( $text ) % 8 ) {
-        Process( $last, $decrypt );
+        $processed .= Process( $last, $decrypt );
     }
     return $processed;
 }
 
-sub M { ( $m = pop ) + ( $m < 0 || -( $m > ~0 ) ) * 2**32 }
+sub M ($) {
+    return unpack( 'V', pack( 'V', pop ) );
+}
 
-sub L {
+sub ROTL ($$) {
+    my ( $x, $n );
     ( $x = pop ) << ( $n = 31 & pop ) | 2**$n - 1 & $x >> 32 - $n;
 }
 
-sub Y { $_[ $_ % @_ ] = L( pop, M( $_[ $_ % @_ ] ) + M( $A + $B ) ) }
+sub ROTR ($$) {
+    ROTL( 32 - ( 31 & shift ), shift );
+}
 
-sub Process {
-    ( $block, $decrypt ) = @_;
-    ( $A, $B ) = unpack "V2", $block . "\0" x 3;
+sub Process ($$) {
+    my ( $block, $decrypt ) = @_;
+    my ( $A, $B ) = unpack "V2", $block . "\0" x 3;
     $_ = '$A = M( $A+$S[0] );$B = M( $B+$S[1] )';
     $decrypt || eval;
     for ( 1 .. @S - 2 ) {
-        $decrypt ? $B = $A ^ L( 32 - ( $A & 31 ), M( $B- $S[ @S - $_ ] ) ) : ( $A = M( $S[ $_ + 1 ] + L( $B, $A ^ $B ) ) );
+        if ( $decrypt ) {
+            $B = $A ^ ROTR( $A, M( $B - $S[ @S - $_ ] ) );
+        } else {
+            $A = M( $S[ $_ + 1 ] + ROTL( $B, $A ^ $B ) );
+        }
         $A ^= $B ^= $A ^= $B;
     }
     $decrypt && ( y/+/-/, eval );
-    $processed .= pack "V2", $A, $B;
+    return pack "V2", $A, $B;
 }
 
 1;
 __END__
+
 
 =head1 NAME
 
@@ -130,3 +148,4 @@ Ronald Rivest for RSA Security, Inc.
 L<perl>, L<http://www.cypherspace.org>, L<http://www.rsasecurity.com>
 
 =cut
+
